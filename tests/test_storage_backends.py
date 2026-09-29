@@ -320,18 +320,15 @@ def test_jsonl_and_sqlite_query_pages_agree_on_250_record_store(tmp_path: Path) 
     assert [m.request_id for m in jsonl.query(model="claude", limit=5)] == claude_page
     assert [m.request_id for m in sqlite.query(model="claude", limit=5)] == claude_page
 
-    assert (
-        [m.request_id for m in jsonl.query(limit=5)]
-        == [m.request_id for m in sqlite.query(limit=5)]
-    )
-    assert (
-        [m.request_id for m in jsonl.query(limit=5, offset=5)]
-        == [m.request_id for m in sqlite.query(limit=5, offset=5)]
-    )
-    assert (
-        [m.request_id for m in jsonl.query(model="claude", limit=5)]
-        == [m.request_id for m in sqlite.query(model="claude", limit=5)]
-    )
+    assert [m.request_id for m in jsonl.query(limit=5)] == [
+        m.request_id for m in sqlite.query(limit=5)
+    ]
+    assert [m.request_id for m in jsonl.query(limit=5, offset=5)] == [
+        m.request_id for m in sqlite.query(limit=5, offset=5)
+    ]
+    assert [m.request_id for m in jsonl.query(model="claude", limit=5)] == [
+        m.request_id for m in sqlite.query(model="claude", limit=5)
+    ]
 
     assert jsonl.count() == sqlite.count() == 250
 
