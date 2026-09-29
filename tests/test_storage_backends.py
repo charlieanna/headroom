@@ -160,7 +160,7 @@ def test_jsonl_storage_round_trip_query_count_and_summary(tmp_path: Path) -> Non
     assert storage.get("missing") is None
 
     results = storage.query(start_time=now - timedelta(hours=1, minutes=30), offset=1, limit=1)
-    assert [item.request_id for item in results] == ["three"]
+    assert [item.request_id for item in results] == ["two"]
     assert storage.query(model="claude")[0].request_id == "two"
     assert storage.query(mode="optimize")[0].request_id == "two"
     assert storage.query(end_time=now - timedelta(hours=1, minutes=30))[0].request_id == "one"
@@ -292,3 +292,48 @@ def test_sqlite_storage_get_conn_reuses_connection_and_create_storage_entrypoint
         lambda group: [SimpleNamespace(name="custom", load=lambda: lambda url: created)],
     )
     assert create_storage("custom://db") is created
+
+
+def test_jsonl_and_sqlite_query_pages_agree_on_250_record_store(tmp_path: Path) -> None:
+    jsonl = JSONLStorage(str(tmp_path / "metrics.jsonl"))
+    sqlite = SQLiteStorage(str(tmp_path / "metrics.db"))
+    base = datetime(2026, 4, 23, 12, 0, 0)
+
+    for i in range(250):
+        metrics = _metrics(
+            f"{i:03d}",
+            base + timedelta(minutes=i),
+            model="claude" if i % 2 == 0 else "gpt-4o",
+            mode="audit" if i % 3 == 0 else "optimize",
+        )
+        jsonl.save(metrics)
+        sqlite.save(metrics)
+
+    newest_page = [f"{i:03d}" for i in range(249, 244, -1)]
+    second_page = [f"{i:03d}" for i in range(244, 239, -1)]
+    claude_page = [f"{i:03d}" for i in range(248, 238, -2)]
+
+    assert [m.request_id for m in jsonl.query(limit=5)] == newest_page
+    assert [m.request_id for m in sqlite.query(limit=5)] == newest_page
+    assert [m.request_id for m in jsonl.query(limit=5, offset=5)] == second_page
+    assert [m.request_id for m in sqlite.query(limit=5, offset=5)] == second_page
+    assert [m.request_id for m in jsonl.query(model="claude", limit=5)] == claude_page
+    assert [m.request_id for m in sqlite.query(model="claude", limit=5)] == claude_page
+
+    assert (
+        [m.request_id for m in jsonl.query(limit=5)]
+        == [m.request_id for m in sqlite.query(limit=5)]
+    )
+    assert (
+        [m.request_id for m in jsonl.query(limit=5, offset=5)]
+        == [m.request_id for m in sqlite.query(limit=5, offset=5)]
+    )
+    assert (
+        [m.request_id for m in jsonl.query(model="claude", limit=5)]
+        == [m.request_id for m in sqlite.query(model="claude", limit=5)]
+    )
+
+    assert jsonl.count() == sqlite.count() == 250
+
+    jsonl.close()
+    sqlite.close()
