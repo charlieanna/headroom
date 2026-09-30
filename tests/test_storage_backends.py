@@ -160,7 +160,7 @@ def test_jsonl_storage_round_trip_query_count_and_summary(tmp_path: Path) -> Non
     assert storage.get("missing") is None
 
     results = storage.query(start_time=now - timedelta(hours=1, minutes=30), offset=1, limit=1)
-    assert [item.request_id for item in results] == ["three"]
+    assert [item.request_id for item in results] == ["two"]
     assert storage.query(model="claude")[0].request_id == "two"
     assert storage.query(mode="optimize")[0].request_id == "two"
     assert storage.query(end_time=now - timedelta(hours=1, minutes=30))[0].request_id == "one"
@@ -181,6 +181,59 @@ def test_jsonl_storage_round_trip_query_count_and_summary(tmp_path: Path) -> Non
     }
 
     storage.close()
+
+
+def test_jsonl_query_paging_matches_sqlite_newest_first(tmp_path: Path) -> None:
+    """JSONL query pages must be the newest-first window SQLite returns (issue #3822)."""
+    jsonl_storage = JSONLStorage(str(tmp_path / "metrics.jsonl"))
+    sqlite_storage = SQLiteStorage(str(tmp_path / "metrics.db"))
+    base = datetime(2026, 4, 23, 12, 0, 0)
+    rows = [
+        _metrics(
+            f"req-{i:03d}",
+            base + timedelta(seconds=i),
+            model="claude" if i % 2 == 0 else "gpt-4o",
+            mode="audit" if i % 3 == 0 else "optimize",
+        )
+        for i in range(250)
+    ]
+    for row in rows:
+        jsonl_storage.save(row)
+        sqlite_storage.save(row)
+
+    def ids(metrics):
+        return [item.request_id for item in metrics]
+
+    newest_first = [
+        row.request_id for row in sorted(rows, key=lambda item: item.timestamp, reverse=True)
+    ]
+
+    for kw in (
+        {"limit": 5, "offset": 0},
+        {"limit": 5, "offset": 5},
+        {"limit": 5, "offset": 10},
+        {"model": "claude", "limit": 5, "offset": 0},
+        {"model": "claude", "limit": 5, "offset": 5},
+        {"mode": "audit", "limit": 4, "offset": 2},
+        {"model": "claude", "mode": "audit", "limit": 3, "offset": 1},
+    ):
+        jsonl_page = jsonl_storage.query(**kw)
+        assert ids(jsonl_page) == ids(sqlite_storage.query(**kw)), kw
+        stamps = [item.timestamp for item in jsonl_page]
+        assert stamps == sorted(stamps, reverse=True), kw
+
+    assert ids(jsonl_storage.query(limit=5)) == newest_first[:5]
+    assert ids(jsonl_storage.query(limit=5))[0] == "req-249"
+
+    page1 = ids(jsonl_storage.query(limit=5, offset=0))
+    page2 = ids(jsonl_storage.query(limit=5, offset=5))
+    page3 = ids(jsonl_storage.query(limit=5, offset=10))
+    assert set(page1).isdisjoint(page2)
+    assert set(page2).isdisjoint(page3)
+    assert set(page1).isdisjoint(page3)
+
+    jsonl_storage.close()
+    sqlite_storage.close()
 
 
 def test_jsonl_storage_handles_missing_file_malformed_lines_and_defaults(tmp_path: Path) -> None:
