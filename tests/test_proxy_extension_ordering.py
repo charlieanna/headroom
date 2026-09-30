@@ -17,6 +17,7 @@ monkeypatching discovery, so the tests exercise the app exactly as
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -25,7 +26,7 @@ from fastapi.testclient import TestClient
 from headroom.cache.compression_store import reset_compression_store
 from headroom.proxy import extensions
 from headroom.proxy import helpers as proxy_helpers
-from headroom.proxy.request_body_limit import RequestBodyLimitMiddleware
+from headroom.proxy.request_body_limit import RequestBodyLimitMiddleware, _too_large_payload
 from headroom.proxy.server import ProxyConfig, WebSocketAuthMiddleware, create_app
 
 NONLOOPBACK = ("203.0.113.5", 44444)  # TEST-NET-3, never loopback
@@ -442,3 +443,28 @@ class TestRequestBodyLimitMiddlewareDirectly:
         await mw({"type": "websocket", "path": "/v1/live"}, None, None)
         await mw({"type": "lifespan"}, None, None)
         assert seen == ["websocket", "lifespan"]
+
+
+class TestTooLargePayloadDialects:
+    """The refusal payload must mirror the dialect each route's handler speaks."""
+
+    def test_anthropic_messages_route_uses_anthropic_envelope(self):
+        payload = json.loads(_too_large_payload("/v1/messages", 1024 * 1024))
+        assert payload["type"] == "error"
+        assert payload["error"]["type"] == "request_too_large"
+        assert "code" not in payload["error"]
+
+    def test_bedrock_invoke_routes_use_the_handler_error_type(self):
+        routes = (
+            "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+        )
+        for path in routes:
+            payload = json.loads(_too_large_payload(path, 1024 * 1024))
+            assert payload["error"]["type"] == "request_too_large", path
+            assert "code" not in payload["error"], path
+
+    def test_other_routes_keep_the_openai_payload(self):
+        payload = json.loads(_too_large_payload("/v1/chat/completions", 1024 * 1024))
+        assert payload["error"]["type"] == "invalid_request_error"
+        assert payload["error"]["code"] == "request_too_large"

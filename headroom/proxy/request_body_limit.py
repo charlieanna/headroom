@@ -47,6 +47,11 @@ Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 # Paths whose clients speak the Anthropic error dialect. Everything else gets
 # the OpenAI-style payload, which is what the handlers' own 413s use.
 _ANTHROPIC_PATH_MARKERS = ("/v1/messages",)
+# Bedrock InvokeModel passthrough routes (``/model/{id}/invoke`` and
+# ``/model/{id}/invoke-with-response-stream`` are the only routes containing
+# ``/invoke``). Their handler's own 413 is an Anthropic-type error without the
+# top-level envelope, so the refusal here must mirror that shape.
+_BEDROCK_INVOKE_PATH_MARKERS = ("/invoke",)
 
 
 def _too_large_payload(path: str, limit: int) -> bytes:
@@ -55,6 +60,10 @@ def _too_large_payload(path: str, limit: int) -> bytes:
     if any(marker in path for marker in _ANTHROPIC_PATH_MARKERS):
         payload: dict[str, Any] = {
             "type": "error",
+            "error": {"type": "request_too_large", "message": message},
+        }
+    elif any(marker in path for marker in _BEDROCK_INVOKE_PATH_MARKERS):
+        payload = {
             "error": {"type": "request_too_large", "message": message},
         }
     else:
